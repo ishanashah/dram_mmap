@@ -1,9 +1,11 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <stdint.h>
 #include <string.h>
+#include <linux/limits.h>
 
 
 #include <sys/types.h>
@@ -19,6 +21,8 @@ typedef struct {
     int flags;
     int fd;
     off_t offset;
+    ino_t inode;
+    int memfd;
 } Mapping;
 
 Mapping map_list[MAX_MAPPINGS];
@@ -26,18 +30,13 @@ int map_size = 0;
 
 /*
 TODO
-Send a request to the server
-Using the fd of an assise file, send a reference of the assise file to the
-server.
-The function returns the fd of a memfd file that has the contents of the assise
-file.
+Send a request to the server.
+Send the inode of an assise file to the server.
+The server responds with a memfd if it already exists for this assie file.
+Otherwise, the server allocates and returns a new empty memfd for the file.
+The function returns the memfd.
 */
-int request_mmap_shared(int fd) {
-    //convert fd to inode
-    struct stat sb;
-    fstat(fd, &sb);
-    ino_t inode = sb.st_ino;
-    //converted to inode
+int request_mmap_shared(ino_t inode) {
     perror("request_mmap_shared NOT IMPLEMENTED");
     return 0;
 }
@@ -46,11 +45,11 @@ int request_mmap_shared(int fd) {
 /*
 TODO
 Send a request to the server
-Using the fd of a memfd file, send a reference of the memfd file to the server.
-The server cleans up any state related to the memfd file, and the function
-returns when it recieves an acknowledgement.
+Send the inode of an assise file to the server.
+The server cleans up any state related to the inode.
+The function returns without waiting for acknowledgement.
 */
-void request_munmap_shared(int fd) {
+void request_munmap_shared(ino_t inode) {
     perror("request_munmap_shared NOT IMPLEMENTED");
 }
 
@@ -72,6 +71,19 @@ void swap_map_list(int lhs, int rhs) {
     map_list[rhs] = temp;
 }
 
+void copy(int fd1, int fd2) {
+    char buffer[4096];
+    lseek(fd1, 0, SEEK_SET);
+    lseek(fd2, 0, SEEK_SET);
+    int length = 0;
+    int bytes = read(fd1, buffer, 4096);
+    while (bytes > 0) {
+        length += bytes;
+        write(fd2, buffer, bytes);
+        bytes = read(fd1, buffer, 4096);
+    }
+    ftruncate(fd2, length);
+}
 
 void* mmap_assise(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
     if (map_size == MAX_MAPPINGS) {
@@ -80,16 +92,27 @@ void* mmap_assise(void* addr, size_t length, int prot, int flags, int fd, off_t 
     }
     if (flags & MAP_SHARED) {
         //printf("SHARED MAPPING NOT IMPLEMENTED\n");
-        fd = request_mmap_shared(fd);
-        void* buffer = mmap(addr, length, flags,
-                MAP_SHARED, fd, offset);
-
-        map_list[map_size].addr = buffer;
         map_list[map_size].length = length;
         map_list[map_size].prot = prot;
         map_list[map_size].flags = flags;
-        map_list[map_size].fd = fd;
+        map_list[map_size].fd = dup(fd);
         map_list[map_size].offset = offset;
+
+        struct stat sb;
+        fstat(fd, &sb);
+        map_list[map_size].inode = sb.st_ino;
+
+        int memfd = request_mmap_shared(sb.st_ino);
+        map_list[map_size].memfd = memfd;
+        fstat(memfd, &sb);
+        if (sb.st_size == 0) {
+            copy(fd, memfd);
+        }
+
+        void* buffer = mmap(addr, length, flags,
+                MAP_SHARED, memfd, offset);
+        map_list[map_size].addr = buffer;
+
         map_size++;
 
         return buffer;
@@ -142,7 +165,8 @@ int munmap_assise(void *addr, size_t len) {
     }
     swap_map_list(index, map_size);
     if (map_list[map_size].flags & MAP_SHARED) {
-        request_munmap_shared(map_list[map_size].fd);
+        msync_assise(map_list[map_size].addr, map_list[map_size].length, MS_SYNC);
+        request_munmap_shared(map_list[map_size].inode);
     }
     munmap(map_list[map_size].addr, map_list[map_size].length);
     map_size--;

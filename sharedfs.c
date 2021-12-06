@@ -15,7 +15,7 @@ typedef enum {
 #define MAX_FILES 1024
 
 typedef struct {
-    char path[PATH_MAX];
+    ino_t inode;
     int memfd;
     int refcount;
 } Shared_file;
@@ -23,18 +23,9 @@ typedef struct {
 Shared_file file_list[MAX_FILES];
 int num_files = 0;
 
-int search_path(char* path) {
+int search_inode(ino_t inode) {
     for (int i = 0; i < num_files; i++) {
-        if(strcmp(path, file_list[i].path) == 0) {
-            return i; 
-        }
-    }
-    return -1;
-}
-
-int search_memfd(int memfd) {
-    for (int i = 0; i < num_files; i++) {
-        if (memfd == file_list[i].memfd) {
+        if (inode == file_list[i].inode) {
             return i;
         }
     }
@@ -47,30 +38,13 @@ void swap_file_list(int lhs, int rhs) {
     file_list[rhs] = temp;
 }
 
-void copy(int fd1, int fd2) {
-    char buffer[4096];
-    lseek(fd1, 0, SEEK_SET);
-    lseek(fd2, 0, SEEK_SET);
-    int length = 0;
-    int bytes = read(fd1, buffer, 4096);
-    while (bytes > 0) {
-        length += bytes;
-        write(fd2, buffer, bytes);
-        bytes = read(fd1, buffer, 4096);
-    }
-    ftruncate(fd2, length);
-}
-
-int handle_request(request_t type, char* filename, int memfd) {
+int handle_request(request_t type, ino_t inode) {
     if (type == MMAP) {
-        int index = search_path(filename);
+        int index = search_inode(inode);
         if (index < 0) {
-            memfd = memfd_create("assise", 0);
-            int fd = open(filename, O_RDONLY);
-            copy(fd, memfd);
-            close(fd);
+            int memfd = memfd_create("assise", 0);
 
-            strcpy(file_list[num_files].path, filename);
+            file_list[num_files].inode = inode;
             file_list[num_files].memfd = memfd;
             file_list[num_files].refcount = 1;
             num_files++;
@@ -82,16 +56,13 @@ int handle_request(request_t type, char* filename, int memfd) {
             return file_list[index].memfd;
         }
     } else if (type == MUNMAP) {
-        int index = search_memfd(memfd);
+        int index = search_inode(inode);
         if (index < 0) {
             return -1;
         }
         file_list[index].refcount--;
         if (file_list[index].refcount == 0) {
             swap_file_list(index, num_files);
-            int fd = open(file_list[num_files].path, O_WRONLY);
-            copy(memfd, fd);
-            close(fd);
             close(file_list[num_files].memfd);
             num_files--;
         }
@@ -106,12 +77,11 @@ int main() {
     printf("Hello, World!\n");
     while(1) {
         request_t type;
-        char filename[PATH_MAX];
-        int fd;
+        ino_t inode;
 
         //CODE TO RECIEVE REQUEST (type, fd)
 
-        int out = handle_request(type, filename, fd);
+        int out = handle_request(type, inode);
 
         //CODE TO SEND RESPONSE (out)
 

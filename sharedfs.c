@@ -62,8 +62,8 @@ int handle_request(request_t type, ino_t inode) {
         }
         file_list[index].refcount--;
         if (file_list[index].refcount == 0) {
-            swap_file_list(index, num_files);
-            close(file_list[num_files].memfd);
+            swap_file_list(index, num_files-1);
+            close(file_list[num_files-1].memfd);
             num_files--;
         }
         return 0;

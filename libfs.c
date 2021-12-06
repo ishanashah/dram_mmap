@@ -163,12 +163,12 @@ int munmap_assise(void *addr, size_t len) {
         printf("INVALID ADDRESS\n");
         return -1;
     }
-    swap_map_list(index, map_size);
-    if (map_list[map_size].flags & MAP_SHARED) {
-        msync_assise(map_list[map_size].addr, map_list[map_size].length, MS_SYNC);
-        request_munmap_shared(map_list[map_size].inode);
+    swap_map_list(index, map_size-1);
+    if (map_list[map_size-1].flags & MAP_SHARED) {
+        msync_assise(map_list[map_size-1].addr, map_list[map_size-1].length, MS_SYNC);
+        request_munmap_shared(map_list[map_size-1].inode);
     }
-    munmap(map_list[map_size].addr, map_list[map_size].length);
+    munmap(map_list[map_size-1].addr, map_list[map_size-1].length);
     map_size--;
     return 0;
 }
